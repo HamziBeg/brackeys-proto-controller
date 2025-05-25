@@ -11,7 +11,9 @@ extends CharacterBody3D
 @export var has_gravity : bool = true
 ## Can we press to jump?
 @export var can_jump : bool = true
-## Can we hold to run?
+## Can we press to duck/crouch?
+@export var can_duck : bool = true
+## Can we press to sprint?
 @export var can_sprint : bool = false
 ## Can we press to enter freefly mode (noclip)?
 @export var can_freefly : bool = false
@@ -21,6 +23,12 @@ extends CharacterBody3D
 @export var look_speed : float = 0.002
 ## Normal speed.
 @export var base_speed : float = 7.0
+## Player movement speed when ducking/crouching.
+@export var duck_speed := 3.5
+## This is actualy head/camera height. Please look at the controller's 3D scene when adjusting these values. Match them to the overall mesh/collider height.
+@export var normal_height := 1.8
+## This is actualy head/camera height. Please look at the controller's 3D scene when adjusting these values. Match them to the height of the 2nd/coll_mid collider.
+@export var duck_height := 1.3
 ## Speed of jump.
 @export var jump_velocity : float = 4.5
 ## How fast do we run?
@@ -39,6 +47,8 @@ extends CharacterBody3D
 @export var input_back : String = "ui_down"
 ## Name of Input Action to Jump.
 @export var input_jump : String = "ui_accept"
+# Name of Input Action to Jump.
+@export var input_duck : String = "ui_duck"
 ## Name of Input Action to Sprint.
 @export var input_sprint : String = "sprint"
 ## Name of Input Action to toggle freefly mode.
@@ -48,12 +58,20 @@ var mouse_captured : bool = false
 var look_rotation : Vector2
 var move_speed : float = 0.0
 var freeflying : bool = false
+var is_ducking := false
+var is_running := false
 
 ## IMPORTANT REFERENCES
 @onready var head: Node3D = $Head
-@onready var collider: CollisionShape3D = $Collider
+@onready var check_height: RayCast3D = $check_height
+
+# Get all 3 player colliders into one single array
+@onready var player_colliders := get_tree().get_nodes_in_group("player_collider")
+#@onready var collider: CollisionShape3D = $Collider
 
 func _ready() -> void:
+	move_speed = base_speed
+	head.position.y = normal_height
 	check_input_mappings()
 	look_rotation.y = rotation.y
 	look_rotation.x = head.rotation.x
@@ -94,15 +112,25 @@ func _physics_process(delta: float) -> void:
 	if can_jump:
 		if Input.is_action_just_pressed(input_jump) and is_on_floor():
 			velocity.y = jump_velocity
+	
+	# Apply ducking/crouching
+	if can_duck and Input.is_action_pressed("ui_duck"):
+		duck()
+	else:
+		try_unduck()
 
 	# Modify speed based on sprinting
 	if can_sprint and Input.is_action_pressed(input_sprint):
 			move_speed = sprint_speed
+			is_running = true
 	else:
-		move_speed = base_speed
+		if is_running:
+			move_speed = base_speed
+			is_running = false
 
 	# Apply desired movement to velocity
 	if can_move:
+		print(move_speed, "\n")
 		var input_dir := Input.get_vector(input_left, input_right, input_forward, input_back)
 		var move_dir := (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
 		if move_dir:
@@ -133,12 +161,14 @@ func rotate_look(rot_input : Vector2):
 
 
 func enable_freefly():
-	collider.disabled = true
+	get_tree().call_group("player_collider","set_disabled", true)
+	#collider.disabled = true
 	freeflying = true
 	velocity = Vector3.ZERO
 
 func disable_freefly():
-	collider.disabled = false
+	get_tree().call_group("player_collider","set_disabled", false)
+	#collider.disabled = false
 	freeflying = false
 
 
@@ -150,6 +180,25 @@ func capture_mouse():
 func release_mouse():
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	mouse_captured = false
+
+func duck():
+	move_speed = duck_speed
+	if !is_ducking:
+		head.position.y = duck_height
+# Check the size of array, then disable 1st member (top or head) collider
+		if player_colliders.size() > 0:
+			player_colliders[0].set_disabled(true)
+		#collider.shape.height = duck_height
+		is_ducking = true
+
+func try_unduck():
+	var can_unduck = check_height.is_colliding() == false
+	if is_ducking and can_unduck:
+		head.position.y = normal_height
+		if player_colliders.size() > 0:
+			player_colliders[0].set_disabled(false)
+		move_speed = base_speed
+		is_ducking = false
 
 
 ## Checks if some Input Actions haven't been created.
@@ -169,6 +218,9 @@ func check_input_mappings():
 		can_move = false
 	if can_jump and not InputMap.has_action(input_jump):
 		push_error("Jumping disabled. No InputAction found for input_jump: " + input_jump)
+		can_jump = false
+	if can_duck and not InputMap.has_action(input_duck):
+		push_error("Ducking/crouching disabled. No InputAction found for input_duck: " + input_duck)
 		can_jump = false
 	if can_sprint and not InputMap.has_action(input_sprint):
 		push_error("Sprinting disabled. No InputAction found for input_sprint: " + input_sprint)
